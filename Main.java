@@ -1,93 +1,136 @@
 package com.company;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.Random;
-import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.time.LocalTime;
 
 class Main {
-    public static void main(String[] args) throws InterruptedException {
-        // 8 temperature sensors, 8 threads
-        Thread[] sensors = new Thread[8];
-        for (int i = 0; i < 8; i++) {
-            sensors[i] = new Thread(new TemperatureSensor(i));
-            sensors[i].start();
+    public static void main(String[] args) {
+
+        System.out.println("Started at " + LocalTime.now());
+        int numPresents = 500000;
+
+        ConcurrentLinkedList presents = new ConcurrentLinkedList();
+        // 4 Threads, 4 Servants
+        Thread[] servants = new Thread[4];
+
+        int chunkSize = numPresents / servants.length;
+
+        for (int i = 0; i < servants.length; i++) {
+            int start = i * chunkSize + 1;
+            int end = (i + 1) * chunkSize;
+            servants[i] = new Thread(new Servant(presents, start, end));
+            servants[i].start();
         }
 
-        // One more thread for the report
-        Thread reportThread = new Thread(new HourlyReport());
-        reportThread.start();
-
-        for (Thread sensor : sensors) {
-            sensor.join();
+        for (Thread servant : servants) {
+            try {
+                servant.join();
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
         }
+
+        // Check if any presents are left in the chain
+        boolean anyLeft = false;
+        for (int i = 1; i <= numPresents; i++) {
+            if (presents.contains(i)) {
+                anyLeft = true;
+                break;
+            }
+        }
+
+        if (anyLeft) {
+            System.out.println("There is at least one present left in the chain.");
+        } else {
+            System.out.println("There are no presents left in the chain.");
+        }
+
+        System.out.println("Finished at " + LocalTime.now());
     }
 }
 
-class TemperatureSensor implements Runnable {
-    public static final List<Double> temperatures = new CopyOnWriteArrayList<>();
-    private final int sensorId;
+class Present {
+    int tag;
+    Present next;
 
-    public TemperatureSensor(int sensorId) {
-        this.sensorId = sensorId;
+    Present(int tag) {
+        this.tag = tag;
+        this.next = null;
+    }
+}
+
+class ConcurrentLinkedList {
+    private Present head;
+
+    public ConcurrentLinkedList() {
+        head = new Present(Integer.MIN_VALUE);
+        head.next = new Present(Integer.MAX_VALUE);
+    }
+
+    public synchronized boolean add(int tag) {
+        Present pred = head;
+        Present curr = pred.next;
+        while (curr.tag < tag) {
+            pred = curr;
+            curr = curr.next;
+        }
+        if (curr.tag == tag) {
+            // Present already exists in the list
+            return false;
+        }
+        Present newPresent = new Present(tag);
+        newPresent.next = curr;
+        pred.next = newPresent;
+
+        return true;
+    }
+
+    public synchronized boolean remove(int tag) {
+        Present pred = head;
+        Present curr = pred.next;
+        while (curr.tag < tag) {
+            pred = curr;
+            curr = curr.next;
+        }
+        if (curr.tag == tag) {
+            pred.next = curr.next;
+
+            // Present was removed
+            return true;
+        }
+
+        // Present was not found
+        return false;
+    }
+
+    public synchronized boolean contains(int tag) {
+        Present curr = head.next;
+        while (curr.tag < tag) {
+            curr = curr.next;
+        }
+        // Present found or not
+        return curr.tag == tag;
+    }
+}
+
+class Servant implements Runnable {
+    private ConcurrentLinkedList presents;
+    private int start;
+    private int end;
+
+    public Servant(ConcurrentLinkedList presents, int start, int end) {
+        this.presents = presents;
+        this.start = start;
+        this.end = end;
     }
 
     @Override
     public void run() {
-        Random random = new Random();
-        for (int hour = 0; hour < 2; hour++) {
-            for (int minute = 0; minute < 60; minute++) {
-                // Generate random temperature between -100F and 70F
-                double temperature = random.nextDouble() * 170 - 100;
-                temperatures.add(temperature);
+        for (int i = start; i <= end; i++) {
+            if (!presents.contains(i)) {
+                presents.add(i);
+            } else {
+                presents.remove(i);
             }
         }
     }
 }
-
-class HourlyReport implements Runnable {
-    private static final List<Double> temperatures = TemperatureSensor.temperatures;
-
-    @Override
-    public void run() {
-        generateReport();
-    }
-
-    private void generateReport() {
-        List<Double> tempList = new ArrayList<>(temperatures);
-        Collections.sort(tempList);
-
-        int size = tempList.size();
-        System.out.println("Top 5 highest temperatures:");
-        for (int i = size - 1; i >= size - 5; i--) {
-            System.out.println(tempList.get(i));
-        }
-
-        System.out.println("\nTop 5 lowest temperatures:");
-        for (int i = 0; i < 5; i++) {
-            System.out.println(tempList.get(i));
-        }
-
-        System.out.println("\nLargest temperature difference in 10 minutes:");
-        double maxDiff = 0;
-        int startIndex = 0, endIndex = 0;
-        for (int i = 0; i < size - 10; i++) {
-            // Get max and min temperatures
-            double minTemp = Collections.min(tempList.subList(i, i + 10));
-            double maxTemp = Collections.max(tempList.subList(i, i + 10));
-            double diff = maxTemp - minTemp;
-            if (diff > maxDiff) {
-                maxDiff = diff;
-                startIndex = i;
-                endIndex = i + 10;
-            }
-        }
-
-        System.out.println("Maximum difference: " + maxDiff);
-        System.out.println("Start index: " + startIndex);
-        System.out.println("End index: " + endIndex);
-    }
-}
-
